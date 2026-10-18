@@ -2,6 +2,7 @@
 """
 Local Tempest WX
 Local UDP display for WeatherFlow Tempest weather stations.
+Cross-platform (Windows / macOS / Linux). Tray and autostart are optional.
 """
 
 import socket
@@ -11,10 +12,13 @@ import webbrowser
 import sys
 import os
 import math
+import platform
 import tkinter as tk
 from tkinter import ttk, colorchooser
 from datetime import datetime, UTC
 from pathlib import Path
+
+IS_WINDOWS = platform.system() == "Windows"
 
 try:
     import winsound
@@ -32,7 +36,7 @@ except ImportError:
 try:
     import ctypes
     from ctypes import wintypes
-    HAS_CTYPES = True
+    HAS_CTYPES = IS_WINDOWS
 except ImportError:
     HAS_CTYPES = False
 
@@ -41,11 +45,12 @@ BUFFER_SIZE = 4096
 CONFIG_FILE = Path(__file__).with_name("tempest_display_config.json")
 
 APP_NAME = "Local Tempest WX"
-APP_VERSION = "1.3"
+APP_VERSION = "1.4"
 AUTHOR = "silicon"
 AUTHOR_EMAIL = "silicon@orangedragon.co"
 AUTHOR_URL = "https://orangedragon.co/labs/dev"
 
+# ---------- Helpers ----------
 def c_to_f(c): return c * 9 / 5 + 32
 def f_to_c(f): return (f - 32) * 5 / 9
 def mps_to_mph(mps): return mps * 2.23694
@@ -86,7 +91,8 @@ def feels_like_c(temp_c, rh, wind_mps=None):
     return temp_c
 
 def apply_rounded_corners(hwnd, enable=True):
-    if not HAS_CTYPES or sys.platform != "win32":
+    """Windows 11 only. No-op elsewhere."""
+    if not HAS_CTYPES:
         return
     try:
         DWMWA_WINDOW_CORNER_PREFERENCE = 33
@@ -99,11 +105,18 @@ def apply_rounded_corners(hwnd, enable=True):
         pass
 
 def startup_shortcut_path():
+    if not IS_WINDOWS:
+        return None
     startup = Path(os.environ.get("APPDATA", "")) / r"Microsoft\Windows\Start Menu\Programs\Startup"
     return startup / "Local Tempest WX.bat"
 
 def set_autostart(enabled, script_path):
+    """Windows only. Returns True on success or if not applicable."""
+    if not IS_WINDOWS:
+        return False
     link = startup_shortcut_path()
+    if link is None:
+        return False
     if enabled:
         try:
             link.parent.mkdir(parents=True, exist_ok=True)
@@ -127,7 +140,10 @@ def set_autostart(enabled, script_path):
             return False
 
 def is_autostart_enabled():
-    return startup_shortcut_path().exists()
+    if not IS_WINDOWS:
+        return False
+    link = startup_shortcut_path()
+    return link is not None and link.exists()
 
 def make_tray_image():
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
@@ -135,6 +151,18 @@ def make_tray_image():
     d.ellipse((8, 8, 56, 56), fill=(30, 144, 255, 255))
     d.ellipse((22, 22, 42, 42), fill=(255, 255, 255, 220))
     return img
+
+def play_alert():
+    """Cross-platform best-effort sound."""
+    if IS_WINDOWS and HAS_WINSOUND:
+        try:
+            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+            winsound.Beep(880, 120)
+        except Exception:
+            pass
+    else:
+        # Fallback: terminal bell (works on many terminals / some systems)
+        print("\a", end="", flush=True)
 
 class TempestDisplay:
     def __init__(self, root):
@@ -147,7 +175,7 @@ class TempestDisplay:
             "always_on_top": False, "dark_mode": False,
             "font_size": 12, "temp_font_size": 28,
             "use_local_time": True, "time_24h": False,
-            "geometry": "460x660", "compact_geometry": "300x140",
+            "geometry": "460x660", "compact_geometry": "320x150",
             "settings_geometry": "480x720", "compact_mode": False,
             "temp_color": "#111111", "humidity_color": "#333333",
             "rain_color": "#1e90ff",
@@ -199,7 +227,7 @@ class TempestDisplay:
         self.field_rows = {}
         self.labels = {}
         self.full_geometry = self.config.get("geometry", "460x660")
-        self.compact_geometry = self.config.get("compact_geometry", "300x140")
+        self.compact_geometry = self.config.get("compact_geometry", "320x150")
         self.settings_geometry = self.config.get("settings_geometry", "480x720")
 
         self._drag_data = {"x": 0, "y": 0, "dragging": False}
@@ -209,7 +237,7 @@ class TempestDisplay:
         self._closing = False
 
         self.root.geometry(self.full_geometry)
-        self.root.minsize(300, 100)
+        self.root.minsize(320, 110)
 
         self._setup_style()
         self._build_ui()
@@ -224,7 +252,7 @@ class TempestDisplay:
         if self.compact_mode:
             self._enter_compact_mode(save=False)
 
-        if self.autostart.get() != is_autostart_enabled():
+        if IS_WINDOWS and self.autostart.get() != is_autostart_enabled():
             set_autostart(self.autostart.get(), self.script_path)
 
         self._start_udp_listener()
@@ -234,6 +262,9 @@ class TempestDisplay:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close_request)
         self.root.after(800, self._update_display)
 
+    # ------------------------------------------------------------------
+    # Config
+    # ------------------------------------------------------------------
     def _load_config(self):
         if CONFIG_FILE.exists():
             try:
@@ -302,6 +333,9 @@ class TempestDisplay:
             self.settings_window.destroy()
         self.root.destroy()
 
+    # ------------------------------------------------------------------
+    # Tray
+    # ------------------------------------------------------------------
     def _setup_tray(self):
         def on_show(icon, item):
             self.root.after(0, self._show_from_tray)
@@ -326,6 +360,9 @@ class TempestDisplay:
         if self.compact_mode:
             self.root.overrideredirect(True)
 
+    # ------------------------------------------------------------------
+    # Theme
+    # ------------------------------------------------------------------
     def _setup_style(self):
         self.style = ttk.Style()
         try:
@@ -385,12 +422,13 @@ class TempestDisplay:
         self.big_temp.configure(style="Big.TLabel")
         self.big_temp_unit.configure(style="Unit.TLabel")
         self.feels_label.configure(style="Humidity.TLabel")
+        self.compact_rain_label.configure(style="Humidity.TLabel")
         self.humidity_label.configure(style="Humidity.TLabel")
         self.rapid_label.configure(style="Humidity.TLabel")
         if hasattr(self, "resize_grip"):
             self.resize_grip.configure(style="Grip.TLabel")
 
-        rain_active = self.data.get("rain_mm") is not None and self.data.get("rain_mm") > 0
+        rain_active = (self.data.get("rain_mm") or 0) > 0
         for key, (name_lbl, val_lbl) in self.field_rows.items():
             name_lbl.configure(style="Header.TLabel")
             if key == "rain" and rain_active:
@@ -401,6 +439,9 @@ class TempestDisplay:
         self._status_colors = {"ok": status_ok, "err": status_err}
         self._settings_bg = settings_bg
 
+    # ------------------------------------------------------------------
+    # Main UI
+    # ------------------------------------------------------------------
     def _build_ui(self):
         self.top = ttk.Frame(self.root, padding=(10, 8))
         self.top.pack(fill="x")
@@ -424,7 +465,7 @@ class TempestDisplay:
         self.temp_frame = ttk.Frame(self.main)
         self.temp_frame.pack(fill="x", pady=(2, 4))
 
-        # Left: big temp + feels like underneath
+        # Left: big temp + feels like + rain (always visible)
         left = ttk.Frame(self.temp_frame)
         left.pack(side="left")
 
@@ -438,6 +479,9 @@ class TempestDisplay:
         self.feels_label = ttk.Label(left, text="", style="Humidity.TLabel", cursor="hand2")
         self.feels_label.pack(anchor="w", pady=(2, 0))
 
+        self.compact_rain_label = ttk.Label(left, text="", style="Humidity.TLabel", cursor="hand2")
+        self.compact_rain_label.pack(anchor="w")
+
         # Right: humidity + rapid wind
         right = ttk.Frame(self.temp_frame)
         right.pack(side="right", pady=(8, 0))
@@ -447,7 +491,7 @@ class TempestDisplay:
         self.rapid_label.pack(anchor="e")
 
         for w in (self.big_temp, self.big_temp_unit, self.feels_label,
-                  self.humidity_label, self.rapid_label):
+                  self.compact_rain_label, self.humidity_label, self.rapid_label):
             w.bind("<Button-1>", self._on_temp_press)
             w.bind("<B1-Motion>", self._on_temp_drag)
             w.bind("<ButtonRelease-1>", self._on_temp_release)
@@ -509,6 +553,9 @@ class TempestDisplay:
         self._update_display()
         self._save_config()
 
+    # ------------------------------------------------------------------
+    # Settings
+    # ------------------------------------------------------------------
     def _toggle_settings(self):
         if self.settings_window and self.settings_window.winfo_exists():
             self._close_settings()
@@ -558,9 +605,13 @@ class TempestDisplay:
         ttk.Checkbutton(beh, text="Lightning strike sound alert",
                         variable=self.lightning_alert, style="Settings.TCheckbutton",
                         command=self._pref_changed).pack(anchor="w")
-        ttk.Checkbutton(beh, text="Start with Windows",
-                        variable=self.autostart, style="Settings.TCheckbutton",
-                        command=self._toggle_autostart).pack(anchor="w")
+        if IS_WINDOWS:
+            ttk.Checkbutton(beh, text="Start with Windows",
+                            variable=self.autostart, style="Settings.TCheckbutton",
+                            command=self._toggle_autostart).pack(anchor="w")
+        else:
+            ttk.Label(beh, text="(Autostart is Windows-only)",
+                      style="Settings.TLabel").pack(anchor="w")
 
         uf = ttk.LabelFrame(container, text="Units", style="Settings.TLabelframe", padding=10)
         uf.pack(fill="x", pady=(0, 8))
@@ -655,6 +706,8 @@ class TempestDisplay:
         self.prefs_btn.config(text="⚙ Settings")
 
     def _toggle_autostart(self):
+        if not IS_WINDOWS:
+            return
         ok = set_autostart(self.autostart.get(), self.script_path)
         if not ok:
             self.autostart.set(not self.autostart.get())
@@ -707,6 +760,9 @@ class TempestDisplay:
         link.bind("<Button-1>", lambda e: webbrowser.open(AUTHOR_URL))
         ttk.Button(f, text="Close", command=about.destroy).pack()
 
+    # ------------------------------------------------------------------
+    # Compact / drag / resize
+    # ------------------------------------------------------------------
     def _on_temp_press(self, event):
         self._drag_data.update(x=event.x, y=event.y, dragging=False)
 
@@ -734,7 +790,7 @@ class TempestDisplay:
         dx = event.x_root - self._resize_data["x"]
         dy = event.y_root - self._resize_data["y"]
         self.root.geometry(
-            f"{max(180, self._resize_data['w'] + dx)}x{max(100, self._resize_data['h'] + dy)}")
+            f"{max(200, self._resize_data['w'] + dx)}x{max(110, self._resize_data['h'] + dy)}")
 
     def _on_resize_release(self, event):
         self._resize_data["resizing"] = False
@@ -755,7 +811,7 @@ class TempestDisplay:
         self.root.overrideredirect(True)
         self.resize_grip.place(relx=1.0, rely=1.0, anchor="se", x=-2, y=-1)
         self.root.geometry(self.compact_geometry)
-        self.root.minsize(180, 100)
+        self.root.minsize(200, 110)
         if save:
             self._save_config()
 
@@ -775,6 +831,9 @@ class TempestDisplay:
             pass
         self._save_config()
 
+    # ------------------------------------------------------------------
+    # Events
+    # ------------------------------------------------------------------
     def _toggle_always_on_top(self):
         self.root.attributes("-topmost", self.always_on_top.get())
         self._save_config()
@@ -808,15 +867,12 @@ class TempestDisplay:
         self._save_config()
 
     def _play_lightning_alert(self):
-        if not self.lightning_alert.get():
-            return
-        if HAS_WINSOUND:
-            try:
-                winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
-                self.root.after(200, lambda: winsound.Beep(880, 120))
-            except Exception:
-                pass
+        if self.lightning_alert.get():
+            play_alert()
 
+    # ------------------------------------------------------------------
+    # UDP
+    # ------------------------------------------------------------------
     def _start_udp_listener(self):
         def listen():
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -843,7 +899,6 @@ class TempestDisplay:
         if mtype == "obs_st":
             obs = msg.get("obs", [[]])[0]
             if len(obs) >= 18:
-                new_rain = obs[12]
                 temp_c = obs[7]
                 rh = obs[8]
                 wind_avg = obs[2]
@@ -853,7 +908,7 @@ class TempestDisplay:
                     "wind_gust_mps": obs[3], "wind_dir": obs[4],
                     "pressure_mb": obs[6], "temp_c": temp_c, "humidity": rh,
                     "illuminance": obs[9], "uv": obs[10], "solar_rad": obs[11],
-                    "rain_mm": new_rain, "battery": obs[16], "obs_timestamp": obs[0],
+                    "rain_mm": obs[12], "battery": obs[16], "obs_timestamp": obs[0],
                     "dew_point_c": dew_point_c(temp_c, rh),
                     "feels_like_c": feels_like_c(temp_c, rh, wind_avg),
                 })
@@ -878,6 +933,9 @@ class TempestDisplay:
                 self.root.after(0, lambda: self.status_label.config(
                     text=f"Lightning ~{evt[1]} km", foreground="#ff9800"))
 
+    # ------------------------------------------------------------------
+    # Formatting
+    # ------------------------------------------------------------------
     def _fmt_temp(self, c):
         if c is None:
             return "—", ""
@@ -932,6 +990,9 @@ class TempestDisplay:
         s = dt.strftime("%I:%M:%S %p UTC")
         return s[1:] if s.startswith("0") else s
 
+    # ------------------------------------------------------------------
+    # Display update
+    # ------------------------------------------------------------------
     def _update_display(self):
         d = self.data
         val, unit = self._fmt_temp(d["temp_c"])
@@ -939,10 +1000,16 @@ class TempestDisplay:
         self.big_temp_unit.config(text=unit)
 
         fl = d.get("feels_like_c")
-        if fl is not None:
-            self.feels_label.config(text=f"feels like {self._fmt_temp_value(fl)}")
-        else:
-            self.feels_label.config(text="")
+        self.feels_label.config(
+            text=f"feels like {self._fmt_temp_value(fl)}" if fl is not None else "")
+
+        # Compact / top rain (always visible)
+        rain_txt = self._fmt_rain(d["rain_mm"])
+        rain_active = (d["rain_mm"] or 0) > 0
+        self.compact_rain_label.config(
+            text=rain_txt,
+            style="Rain.TLabel" if rain_active else "Humidity.TLabel"
+        )
 
         self.humidity_label.config(
             text=f"{d['humidity']:.0f}% humidity" if d["humidity"] is not None else "")
@@ -974,12 +1041,8 @@ class TempestDisplay:
 
         set_val("uv", f"{d['uv']:.1f}" if d["uv"] is not None else "—")
         set_val("solar", f"{d['solar_rad']:.0f} W/m²" if d["solar_rad"] is not None else "—")
-
-        # Rain: always show; style switches with amount
-        rain_txt = self._fmt_rain(d["rain_mm"])
         set_val("rain", rain_txt)
         if "rain" in self.labels:
-            rain_active = d["rain_mm"] is not None and d["rain_mm"] > 0
             self.labels["rain"].configure(style="Rain.TLabel" if rain_active else "Value.TLabel")
 
         set_val("lux", f"{d['illuminance']:,.0f} lux" if d["illuminance"] is not None else "—")
