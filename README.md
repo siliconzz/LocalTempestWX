@@ -234,4 +234,9 @@ This project is provided as-is for personal and educational use. Feel free to mo
 
 ---
 
+## Known issues
+
+- 
+
+
 Enjoy your local weather display.

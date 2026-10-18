@@ -3,6 +3,7 @@
 Local Tempest WX
 Local UDP display for WeatherFlow Tempest weather stations.
 Cross-platform (Windows / macOS / Linux). Tray and autostart are optional.
+Requires Python 3.8+
 """
 
 import socket
@@ -15,7 +16,7 @@ import math
 import platform
 import tkinter as tk
 from tkinter import ttk, colorchooser
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from pathlib import Path
 
 IS_WINDOWS = platform.system() == "Windows"
@@ -45,7 +46,7 @@ BUFFER_SIZE = 4096
 CONFIG_FILE = Path(__file__).with_name("tempest_display_config.json")
 
 APP_NAME = "Local Tempest WX"
-APP_VERSION = "1.4"
+APP_VERSION = "1.5"
 AUTHOR = "silicon"
 AUTHOR_EMAIL = "silicon@orangedragon.co"
 AUTHOR_URL = "https://orangedragon.co/labs/dev"
@@ -91,7 +92,7 @@ def feels_like_c(temp_c, rh, wind_mps=None):
     return temp_c
 
 def apply_rounded_corners(hwnd, enable=True):
-    """Windows 11 only. No-op elsewhere."""
+    """Windows 11 and recent Ubuntu (via compositor). No-op elsewhere."""
     if not HAS_CTYPES:
         return
     try:
@@ -111,7 +112,6 @@ def startup_shortcut_path():
     return startup / "Local Tempest WX.bat"
 
 def set_autostart(enabled, script_path):
-    """Windows only. Returns True on success or if not applicable."""
     if not IS_WINDOWS:
         return False
     link = startup_shortcut_path()
@@ -153,7 +153,6 @@ def make_tray_image():
     return img
 
 def play_alert():
-    """Cross-platform best-effort sound."""
     if IS_WINDOWS and HAS_WINSOUND:
         try:
             winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
@@ -161,7 +160,6 @@ def play_alert():
         except Exception:
             pass
     else:
-        # Fallback: terminal bell (works on many terminals / some systems)
         print("\a", end="", flush=True)
 
 class TempestDisplay:
@@ -175,7 +173,7 @@ class TempestDisplay:
             "always_on_top": False, "dark_mode": False,
             "font_size": 12, "temp_font_size": 28,
             "use_local_time": True, "time_24h": False,
-            "geometry": "460x660", "compact_geometry": "320x150",
+            "geometry": "460x660", "compact_geometry": "360x160",
             "settings_geometry": "480x720", "compact_mode": False,
             "temp_color": "#111111", "humidity_color": "#333333",
             "rain_color": "#1e90ff",
@@ -227,7 +225,7 @@ class TempestDisplay:
         self.field_rows = {}
         self.labels = {}
         self.full_geometry = self.config.get("geometry", "460x660")
-        self.compact_geometry = self.config.get("compact_geometry", "320x150")
+        self.compact_geometry = self.config.get("compact_geometry", "360x160")
         self.settings_geometry = self.config.get("settings_geometry", "480x720")
 
         self._drag_data = {"x": 0, "y": 0, "dragging": False}
@@ -428,6 +426,11 @@ class TempestDisplay:
         if hasattr(self, "resize_grip"):
             self.resize_grip.configure(style="Grip.TLabel")
 
+        if hasattr(self, "prefs_btn"):
+            self.prefs_btn.configure(style="TButton")
+        if hasattr(self, "about_btn"):
+            self.about_btn.configure(style="TButton")
+
         rain_active = (self.data.get("rain_mm") or 0) > 0
         for key, (name_lbl, val_lbl) in self.field_rows.items():
             name_lbl.configure(style="Header.TLabel")
@@ -454,7 +457,8 @@ class TempestDisplay:
         self.prefs_btn = ttk.Button(self.top, text="⚙ Settings", width=10,
                                     command=self._toggle_settings)
         self.prefs_btn.pack(side="left", padx=(12, 0))
-        ttk.Button(self.top, text="About", width=7, command=self._show_about).pack(side="left", padx=(8, 0))
+        self.about_btn = ttk.Button(self.top, text="About", width=7, command=self._show_about)
+        self.about_btn.pack(side="left", padx=(8, 0))
 
         self.status_label = ttk.Label(self.top, text="Waiting for data…", style="Status.TLabel")
         self.status_label.pack(side="right")
@@ -465,7 +469,6 @@ class TempestDisplay:
         self.temp_frame = ttk.Frame(self.main)
         self.temp_frame.pack(fill="x", pady=(2, 4))
 
-        # Left: big temp + feels like + rain (always visible)
         left = ttk.Frame(self.temp_frame)
         left.pack(side="left")
 
@@ -482,9 +485,8 @@ class TempestDisplay:
         self.compact_rain_label = ttk.Label(left, text="", style="Humidity.TLabel", cursor="hand2")
         self.compact_rain_label.pack(anchor="w")
 
-        # Right: humidity + rapid wind
         right = ttk.Frame(self.temp_frame)
-        right.pack(side="right", pady=(8, 0))
+        right.pack(side="right", padx=(12, 4), pady=(8, 0))
         self.humidity_label = ttk.Label(right, text="", style="Humidity.TLabel", cursor="hand2")
         self.humidity_label.pack(anchor="e")
         self.rapid_label = ttk.Label(right, text="", style="Humidity.TLabel", cursor="hand2")
@@ -763,6 +765,15 @@ class TempestDisplay:
     # ------------------------------------------------------------------
     # Compact / drag / resize
     # ------------------------------------------------------------------
+    def _current_geometry(self):
+        """Return a reliable geometry string using winfo_*."""
+        self.root.update_idletasks()
+        w = self.root.winfo_width()
+        h = self.root.winfo_height()
+        x = self.root.winfo_x()
+        y = self.root.winfo_y()
+        return f"{w}x{h}+{x}+{y}"
+
     def _on_temp_press(self, event):
         self._drag_data.update(x=event.x, y=event.y, dragging=False)
 
@@ -777,6 +788,10 @@ class TempestDisplay:
     def _on_temp_release(self, event):
         if not self._drag_data.get("dragging"):
             self._toggle_compact()
+        else:
+            if self.compact_mode:
+                self.compact_geometry = self._current_geometry()
+                self._save_config()
         self._drag_data["dragging"] = False
 
     def _on_resize_press(self, event):
@@ -790,10 +805,15 @@ class TempestDisplay:
         dx = event.x_root - self._resize_data["x"]
         dy = event.y_root - self._resize_data["y"]
         self.root.geometry(
-            f"{max(200, self._resize_data['w'] + dx)}x{max(110, self._resize_data['h'] + dy)}")
+            f"{max(300, self._resize_data['w'] + dx)}x{max(140, self._resize_data['h'] + dy)}")
 
     def _on_resize_release(self, event):
         self._resize_data["resizing"] = False
+        geo = self._current_geometry()
+        if self.compact_mode:
+            self.compact_geometry = geo
+        else:
+            self.full_geometry = geo
         self._save_config()
 
     def _toggle_compact(self, event=None):
@@ -804,27 +824,60 @@ class TempestDisplay:
 
     def _enter_compact_mode(self, save=True):
         self.compact_mode = True
-        self.full_geometry = self.root.geometry()
+
+        if not self.root.overrideredirect():
+            self.full_geometry = self._current_geometry()
+
         self.top.pack_forget()
         self.separator.pack_forget()
         self.grid.pack_forget()
-        self.root.overrideredirect(True)
-        self.resize_grip.place(relx=1.0, rely=1.0, anchor="se", x=-2, y=-1)
+
+        if IS_WINDOWS:
+            # Windows: true borderless
+            self.root.withdraw()
+            self.root.overrideredirect(True)
+            self.root.deiconify()
+            self.root.update_idletasks()
+        else:
+            # Linux/macOS: leave decorations so geometry and layout stay reliable
+            self.root.update_idletasks()
+
         self.root.geometry(self.compact_geometry)
-        self.root.minsize(200, 110)
+        self.root.minsize(300, 140)
+        self.root.update_idletasks()
+
+        # Ensure right-side content is visible
+        self.humidity_label.pack(anchor="e")
+        self.rapid_label.pack(anchor="e")
+        self.temp_frame.update_idletasks()
+
+        self.resize_grip.place(relx=1.0, rely=1.0, anchor="se", x=-4, y=-2)
+        self.resize_grip.lift()
+
         if save:
             self._save_config()
 
     def _exit_compact_mode(self):
+        self.compact_geometry = self._current_geometry()
         self.compact_mode = False
-        self.compact_geometry = self.root.geometry()
+
         self.resize_grip.place_forget()
-        self.root.overrideredirect(False)
-        self.top.pack(fill="x")
+
+        if IS_WINDOWS:
+            self.root.withdraw()
+            self.root.overrideredirect(False)
+            self.root.deiconify()
+            self.root.update_idletasks()
+
+        # Restore full UI (top bar first)
+        self.top.pack(fill="x", before=self.main)
         self.separator.pack(fill="x", pady=8)
         self.grid.pack(fill="both", expand=True)
+
         self.root.geometry(self.full_geometry)
         self.root.minsize(360, 480)
+        self.root.update_idletasks()
+
         try:
             apply_rounded_corners(self.root.winfo_id())
         except Exception:
@@ -918,7 +971,7 @@ class TempestDisplay:
             if len(ob) >= 3:
                 self.data.update({
                     "rapid_wind_mps": ob[1], "rapid_wind_dir": ob[2],
-                    "last_rapid": datetime.fromtimestamp(ob[0], UTC).strftime("%H:%M:%S UTC"),
+                    "last_rapid": datetime.fromtimestamp(ob[0], timezone.utc).strftime("%H:%M:%S UTC"),
                 })
                 if self.data.get("temp_c") is not None:
                     self.data["feels_like_c"] = feels_like_c(
@@ -984,7 +1037,7 @@ class TempestDisplay:
                 return dt.strftime("%H:%M:%S")
             s = dt.strftime("%I:%M:%S %p")
             return s[1:] if s.startswith("0") else s
-        dt = datetime.fromtimestamp(ts, UTC)
+        dt = datetime.fromtimestamp(ts, timezone.utc)
         if self.time_24h.get():
             return dt.strftime("%H:%M:%S UTC")
         s = dt.strftime("%I:%M:%S %p UTC")
@@ -1003,7 +1056,6 @@ class TempestDisplay:
         self.feels_label.config(
             text=f"feels like {self._fmt_temp_value(fl)}" if fl is not None else "")
 
-        # Compact / top rain (always visible)
         rain_txt = self._fmt_rain(d["rain_mm"])
         rain_active = (d["rain_mm"] or 0) > 0
         self.compact_rain_label.config(
