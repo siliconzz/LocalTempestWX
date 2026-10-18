@@ -23,7 +23,7 @@ No cloud account or internet connection is required once the station is on the s
 ### Rain Active
 ![Rain amount highlighted in rain attention color](screenshots/rain-active.png)
 
-> **Note:** Add your own screenshots to a `screenshots/` folder and update the filenames above if needed.
+> 
 
 ---
 
