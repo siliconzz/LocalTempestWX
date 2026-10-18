@@ -179,6 +179,7 @@ class TempestDisplay:
             "rain_color": "#1e90ff",
             "minimize_to_tray": True,
             "lightning_alert": True,
+            "lightning_unit": "km",
             "autostart": False,
             "show_fields": {
                 "pressure": True, "wind_avg": True, "wind_gust": True,
@@ -203,6 +204,7 @@ class TempestDisplay:
         self.time_24h = tk.BooleanVar(value=self.config.get("time_24h", False))
         self.minimize_to_tray = tk.BooleanVar(value=self.config.get("minimize_to_tray", True))
         self.lightning_alert = tk.BooleanVar(value=self.config.get("lightning_alert", True))
+        self.lightning_unit = tk.StringVar(value=self.config.get("lightning_unit", "km"))
         self.autostart = tk.BooleanVar(value=self.config.get("autostart", is_autostart_enabled()))
         self.compact_mode = self.config.get("compact_mode", False)
 
@@ -304,6 +306,7 @@ class TempestDisplay:
             "rain_color": self.rain_color,
             "minimize_to_tray": self.minimize_to_tray.get(),
             "lightning_alert": self.lightning_alert.get(),
+            "lightning_unit": self.lightning_unit.get(),
             "autostart": self.autostart.get(),
             "show_fields": {k: v.get() for k, v in self.show_fields.items()},
         }
@@ -604,16 +607,23 @@ class TempestDisplay:
         if not HAS_TRAY:
             ttk.Label(beh, text="(Install pystray + Pillow for tray support)",
                       style="Settings.TLabel").pack(anchor="w")
-        ttk.Checkbutton(beh, text="Lightning strike sound alert",
+        ttk.Checkbutton(beh, text="Lightning notifications (sound + status)",
                         variable=self.lightning_alert, style="Settings.TCheckbutton",
                         command=self._pref_changed).pack(anchor="w")
+        ttk.Label(beh, text="Lightning distance:", style="Settings.TLabel").pack(anchor="w", pady=(6, 0))
+        unit_frame = ttk.Frame(beh, style="Settings.TFrame")
+        unit_frame.pack(anchor="w")
+        ttk.Radiobutton(unit_frame, text="km", variable=self.lightning_unit, value="km",
+                        style="Settings.TRadiobutton", command=self._pref_changed).pack(side="left", padx=(0, 8))
+        ttk.Radiobutton(unit_frame, text="miles", variable=self.lightning_unit, value="mi",
+                        style="Settings.TRadiobutton", command=self._pref_changed).pack(side="left")
         if IS_WINDOWS:
             ttk.Checkbutton(beh, text="Start with Windows",
                             variable=self.autostart, style="Settings.TCheckbutton",
-                            command=self._toggle_autostart).pack(anchor="w")
+                            command=self._toggle_autostart).pack(anchor="w", pady=(6, 0))
         else:
             ttk.Label(beh, text="(Autostart is Windows-only)",
-                      style="Settings.TLabel").pack(anchor="w")
+                      style="Settings.TLabel").pack(anchor="w", pady=(6, 0))
 
         uf = ttk.LabelFrame(container, text="Units", style="Settings.TLabelframe", padding=10)
         uf.pack(fill="x", pady=(0, 8))
@@ -692,6 +702,15 @@ class TempestDisplay:
                             command=self._rebuild_fields).grid(
                 row=i // 2, column=i % 2, sticky="w", padx=10, pady=3)
 
+        # Testing / Dev section
+        test_frame = ttk.LabelFrame(container, text="Testing", style="Settings.TLabelframe", padding=10)
+        test_frame.pack(fill="x", pady=(0, 8))
+        ttk.Button(test_frame, text="Simulate Lightning", command=self._simulate_lightning,
+                   style="Settings.TButton").pack(side="left", padx=(0, 8))
+        ttk.Button(test_frame, text="Toggle Rain", command=self._simulate_rain,
+                   style="Settings.TButton").pack(side="left")
+        ttk.Label(test_frame, text="(for testing alerts only)", style="Settings.TLabel").pack(side="left", padx=(12, 0))
+
         win.protocol("WM_DELETE_WINDOW", self._close_settings)
         win.bind("<Configure>", self._on_settings_configure)
 
@@ -761,6 +780,37 @@ class TempestDisplay:
         link.pack(pady=(0, 14))
         link.bind("<Button-1>", lambda e: webbrowser.open(AUTHOR_URL))
         ttk.Button(f, text="Close", command=about.destroy).pack()
+
+    # ------------------------------------------------------------------
+    # Testing / Dev
+    # ------------------------------------------------------------------
+    def _simulate_lightning(self):
+        """Fake a lightning strike for testing the alert."""
+        self.data["last_strike_ts"] = int(datetime.now().timestamp())
+        self.data["last_strike_km"] = 5.2
+        if self.lightning_alert.get():
+            self._play_lightning_alert()
+            dist_txt = self._fmt_lightning_distance(5.2)
+            self.status_label.config(text=f"Lightning ~{dist_txt} (simulated)", foreground="#ff9800")
+
+    def _simulate_rain(self):
+        """Toggle between rain and no rain for testing the color change."""
+        current = self.data.get("rain_mm") or 0
+        if current > 0:
+            self.data["rain_mm"] = 0.0
+            self.status_label.config(text="Rain cleared (simulated)", foreground=self._status_colors["ok"])
+        else:
+            self.data["rain_mm"] = 2.54  # ~0.1 inch
+            self.status_label.config(text="Rain active (simulated)", foreground=self.rain_color)
+        self._update_display()
+
+    def _fmt_lightning_distance(self, km):
+        if km is None:
+            return "—"
+        if self.lightning_unit.get() == "mi":
+            miles = km * 0.621371
+            return f"{miles:.1f} mi"
+        return f"{km:.1f} km"
 
     # ------------------------------------------------------------------
     # Compact / drag / resize
@@ -833,20 +883,17 @@ class TempestDisplay:
         self.grid.pack_forget()
 
         if IS_WINDOWS:
-            # Windows: true borderless
             self.root.withdraw()
             self.root.overrideredirect(True)
             self.root.deiconify()
             self.root.update_idletasks()
         else:
-            # Linux/macOS: leave decorations so geometry and layout stay reliable
             self.root.update_idletasks()
 
         self.root.geometry(self.compact_geometry)
         self.root.minsize(300, 140)
         self.root.update_idletasks()
 
-        # Ensure right-side content is visible
         self.humidity_label.pack(anchor="e")
         self.rapid_label.pack(anchor="e")
         self.temp_frame.update_idletasks()
@@ -869,7 +916,6 @@ class TempestDisplay:
             self.root.deiconify()
             self.root.update_idletasks()
 
-        # Restore full UI (top bar first)
         self.top.pack(fill="x", before=self.main)
         self.separator.pack(fill="x", pady=8)
         self.grid.pack(fill="both", expand=True)
@@ -980,11 +1026,14 @@ class TempestDisplay:
         elif mtype == "evt_strike":
             evt = msg.get("evt", [])
             if len(evt) >= 2:
+                km = evt[1]
                 self.data["last_strike_ts"] = evt[0]
-                self.data["last_strike_km"] = evt[1]
-                self.root.after(0, self._play_lightning_alert)
-                self.root.after(0, lambda: self.status_label.config(
-                    text=f"Lightning ~{evt[1]} km", foreground="#ff9800"))
+                self.data["last_strike_km"] = km
+                if self.lightning_alert.get():
+                    self.root.after(0, self._play_lightning_alert)
+                    dist_txt = self._fmt_lightning_distance(km)
+                    self.root.after(0, lambda: self.status_label.config(
+                        text=f"Lightning ~{dist_txt}", foreground="#ff9800"))
 
     # ------------------------------------------------------------------
     # Formatting
