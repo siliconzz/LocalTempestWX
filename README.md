@@ -86,13 +86,13 @@ No other external dependencies are required for core functionality.
 ## Running the App
 
 ```bash
-python weather_display.py
+python local_tempest_wx.py
 ```
 
 Or use `pythonw` on Windows to avoid a console window:
 
 ```bash
-pythonw weather_display.py
+pythonw local_tempest_wx.py
 ```
 
 ### Windows Shortcut
@@ -100,7 +100,7 @@ pythonw weather_display.py
 Create a shortcut with the target:
 
 ```text
-pythonw "C:\path\to\weather_display.py"
+pythonw "C:\path\to\local_tempest_wx.py"
 ```
 
 ---
@@ -192,7 +192,7 @@ All processing happens locally. No data is sent to any external service.
 
 ```
 .
-├── weather_display.py          # Main application
+├── local_tempest_wx.py          # Main application
 ├── tempest_display_config.json # Auto-generated settings (created on first run)
 ├── screenshots/                # Optional screenshots for the README
 │   ├── full-view.png
