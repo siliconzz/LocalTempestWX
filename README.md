@@ -23,8 +23,6 @@ No cloud account or internet connection is required once the station is on the s
 ### Rain Active
 ![Rain amount highlighted in rain attention color](screenshots/rain-active.png)
 
-> 
-
 ---
 
 ## Features
@@ -39,6 +37,7 @@ No cloud account or internet connection is required once the station is on the s
   - Wind (mph, km/h, m/s, knots)
   - Pressure (inHg, mb, mmHg)
   - Rain (inches / mm)
+  - Lightning distance (km / miles)
 - **Calculated values**
   - Feels-like temperature (heat index or wind chill)
   - Dew point
@@ -50,11 +49,12 @@ No cloud account or internet connection is required once the station is on the s
 - **Font size controls** (temperature and other values)
 - **Color customization** (temperature, humidity/rapid wind, rain)
 - **12-hour / 24-hour time** and local time vs UTC
-- **Lightning strike alert** (optional sound)
+- **Lightning notifications** — optional sound + status message, with km or miles
 - **System tray** support (minimize to tray on close)
 - **Start with Windows** (optional)
 - **Settings window** that remembers size and position
 - **Persistent configuration** saved to `tempest_display_config.json`
+- **Testing tools** — simulate lightning strikes and rain from the Settings window
 - **Cross-platform** (Windows, macOS, Linux) — some features are platform-specific
 
 ---
@@ -119,12 +119,13 @@ Open **⚙ Settings** to change:
 
 | Category     | Options                                      |
 |--------------|----------------------------------------------|
-| Behavior     | Minimize to tray, lightning alert, autostart (Windows) |
+| Behavior     | Minimize to tray, lightning notifications, lightning distance (km/miles), autostart (Windows) |
 | Units        | Temperature, wind, pressure, rain            |
 | Time         | Local vs UTC, 12/24-hour                     |
 | Colors       | Temperature, humidity/rapid, rain attention  |
 | Font sizes   | Value text and large temperature             |
 | Show Fields  | Toggle individual data rows                  |
+| Testing      | Simulate Lightning, Toggle Rain              |
 
 Window size, position, compact mode state, and dark mode are also remembered.
 
@@ -137,6 +138,18 @@ Window size, position, compact mode state, and dark mode are also remembered.
 - Drag the window by clicking and holding the temperature area.
 - Resize using the grip in the bottom-right corner.
 - Click the temperature again to return to the full view.
+
+**Platform notes:**
+- **Windows**: borderless window.
+- **Linux / macOS**: keeps the title bar for more reliable size and position memory.
+
+---
+
+## Lightning Notifications
+
+- Enable or disable lightning notifications (sound + status message) in Settings → Behavior.
+- Choose distance unit: **km** or **miles**.
+- Use **Simulate Lightning** in the Testing section to test the alert without waiting for real weather.
 
 ---
 
@@ -183,6 +196,7 @@ All processing happens locally. No data is sent to any external service.
 | Start with OS        | Yes     | No    | No    |
 | Rounded corners      | Win11   | No    | No    |
 | Lightning sound      | Yes     | Limited | Limited |
+| Borderless compact   | Yes     | No    | No    |
 
 \*Requires `pystray` + `Pillow`.
 
@@ -231,12 +245,13 @@ This project is provided as-is for personal and educational use. Feel free to mo
 | Tray icon missing           | Install `pystray` and `Pillow`                    |
 | Settings window off-screen  | Delete `tempest_display_config.json` and restart  |
 | Lightning sound not working | Expected on non-Windows; enable in Settings       |
+| Compact mode size not remembered on Linux | Expected — title bar is kept for reliability |
 
 ---
 
-## Known issues
+## Known Issues
 
-- 
-
+- Compact mode on Linux/macOS keeps the title bar (by design) so size and position are remembered correctly.
+- Lightning sound is most reliable on Windows.
 
 Enjoy your local weather display.
