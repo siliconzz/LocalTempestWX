@@ -81,6 +81,8 @@ No other external dependencies are required for core functionality.
    ```
 3. Make sure your computer and Tempest hub are on the same network.
 
+If you're using Windows you can get LocalTempestWX_Setup-x64.exe under Releases.
+
 ---
 
 ## Running the App
