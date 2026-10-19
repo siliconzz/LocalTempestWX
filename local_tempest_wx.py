@@ -43,7 +43,18 @@ except ImportError:
 
 UDP_PORT = 50222
 BUFFER_SIZE = 4096
-CONFIG_FILE = Path(__file__).with_name("tempest_display_config.json")
+
+def get_config_path():
+    """Return a writable path for the config file that works for both script and frozen exe."""
+    if getattr(sys, "frozen", False):
+        # Running as compiled exe (cx_Freeze / PyInstaller)
+        base = Path(sys.executable).parent
+    else:
+        # Running as normal Python script
+        base = Path(__file__).parent
+    return base / "tempest_display_config.json"
+
+CONFIG_FILE = get_config_path()
 
 APP_NAME = "Local Tempest WX"
 APP_VERSION = "1.5"
@@ -166,7 +177,7 @@ class TempestDisplay:
     def __init__(self, root):
         self.root = root
         self.root.title(APP_NAME)
-        self.script_path = Path(__file__).resolve()
+        self.script_path = Path(__file__).resolve() if not getattr(sys, "frozen", False) else Path(sys.executable)
 
         self.defaults = {
             "temp_unit": "F", "wind_unit": "mph", "baro_unit": "inHg", "rain_unit": "in",
