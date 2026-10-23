@@ -45,7 +45,6 @@ UDP_PORT = 50222
 BUFFER_SIZE = 4096
 
 def get_config_path():
-    """Return a writable path for the config file that works for both script and frozen exe."""
     if getattr(sys, "frozen", False):
         base = Path(sys.executable).parent
     else:
@@ -55,7 +54,7 @@ def get_config_path():
 CONFIG_FILE = get_config_path()
 
 APP_NAME = "Local Tempest WX"
-APP_VERSION = "1.5"
+APP_VERSION = "1.6"
 AUTHOR = "silicon"
 AUTHOR_EMAIL = "silicon@orangedragon.co"
 AUTHOR_URL = "https://orangedragon.co/labs/dev"
@@ -69,6 +68,11 @@ def mps_to_kts(mps): return mps * 1.94384
 def mb_to_inhg(mb): return mb * 0.02953
 def mb_to_mmhg(mb): return mb * 0.750062
 def mm_to_inches(mm): return mm / 25.4
+
+def kgm3_to_lbft3(kgm3):
+    if kgm3 is None:
+        return None
+    return kgm3 * 0.062428
 
 def degrees_to_compass(deg):
     if deg is None:
@@ -92,7 +96,7 @@ def feels_like_c(temp_c, rh, wind_mps=None):
         v = mps_to_mph(wind_mps)
         wc = 35.74 + 0.6215 * t_f - 35.75 * (v ** 0.16) + 0.4275 * t_f * (v ** 0.16)
         return f_to_c(wc)
-    if t_f >= 80:
+    if t_f >= 80 and rh >= 40:
         hi = (-42.379 + 2.04901523 * t_f + 10.14333127 * rh
               - 0.22475541 * t_f * rh - 6.83783e-3 * t_f ** 2
               - 5.481717e-2 * rh ** 2 + 1.22874e-3 * t_f ** 2 * rh
@@ -100,22 +104,51 @@ def feels_like_c(temp_c, rh, wind_mps=None):
         return f_to_c(hi)
     return temp_c
 
-def station_to_sealevel_pressure(station_mb, elev_m, temp_c=None):
-    """Convert station pressure (mb) to approximate sea-level pressure (mb)."""
+def station_to_sealevel_pressure(station_mb, elev_m, temp_c=None, height_agl_m=0.0):
     if station_mb is None or elev_m is None:
         return None
-    if elev_m == 0:
+    if elev_m == 0 and height_agl_m == 0:
         return station_mb
-    if temp_c is None:
-        temp_c = 15.0
+
+    P0 = 1013.25
+    Rd = 287.05
+    gamma_s = 0.0065
+    g = 9.80665
+    T0 = 288.15
+
+    h = elev_m + height_agl_m
     try:
-        p_sl = station_mb * (1 - (0.0065 * elev_m) / (temp_c + 0.0065 * elev_m + 273.15)) ** -5.257
+        exponent = (Rd * gamma_s) / g
+        p_sl = station_mb * (
+            1 + ((P0 / station_mb) ** exponent) * (gamma_s * h / T0)
+        ) ** (g / (Rd * gamma_s))
         return p_sl
     except Exception:
         return station_mb
 
+def air_density(station_mb, temp_c):
+    if station_mb is None or temp_c is None:
+        return None
+    T_k = temp_c + 273.15
+    return (station_mb * 100) / (287.058 * T_k)
+
+def rain_rate_category(mm_per_min):
+    if mm_per_min is None or mm_per_min <= 0:
+        return "None", 0.0
+    rate_mmh = mm_per_min * 60
+    if rate_mmh < 0.25:
+        return "Very Light", rate_mmh
+    if rate_mmh < 1.0:
+        return "Light", rate_mmh
+    if rate_mmh < 4.0:
+        return "Moderate", rate_mmh
+    if rate_mmh < 16.0:
+        return "Heavy", rate_mmh
+    if rate_mmh < 50.0:
+        return "Very Heavy", rate_mmh
+    return "Extreme", rate_mmh
+
 def apply_rounded_corners(hwnd, enable=True):
-    """Windows 11 and recent Ubuntu (via compositor). No-op elsewhere."""
     if not HAS_CTYPES:
         return
     try:
@@ -205,9 +238,11 @@ class TempestDisplay:
             "lightning_unit": "km",
             "elevation": 0.0,
             "elevation_unit": "ft",
+            "density_unit": "kg/m3",
             "autostart": False,
             "show_fields": {
                 "pressure": True, "station_pressure": True,
+                "air_density": True, "rain_rate": True,
                 "wind_avg": True, "wind_gust": True,
                 "wind_lull": True, "wind_dir": True, "rapid_wind": True,
                 "feels_like": True, "dew_point": True,
@@ -233,6 +268,7 @@ class TempestDisplay:
         self.lightning_unit = tk.StringVar(value=self.config.get("lightning_unit", "km"))
         self.elevation = tk.DoubleVar(value=self.config.get("elevation", 0.0))
         self.elevation_unit = tk.StringVar(value=self.config.get("elevation_unit", "ft"))
+        self.density_unit = tk.StringVar(value=self.config.get("density_unit", "kg/m3"))
         self.autostart = tk.BooleanVar(value=self.config.get("autostart", is_autostart_enabled()))
         self.compact_mode = self.config.get("compact_mode", False)
 
@@ -246,6 +282,7 @@ class TempestDisplay:
 
         self.data = {k: None for k in (
             "temp_c", "humidity", "pressure_mb", "sealevel_pressure_mb",
+            "air_density", "rain_rate_mmh", "rain_rate_category",
             "wind_avg_mps", "wind_gust_mps", "wind_lull_mps", "wind_dir",
             "rapid_wind_mps", "rapid_wind_dir", "uv", "solar_rad", "rain_mm",
             "illuminance", "battery", "last_obs", "last_rapid", "serial",
@@ -290,9 +327,6 @@ class TempestDisplay:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close_request)
         self.root.after(800, self._update_display)
 
-    # ------------------------------------------------------------------
-    # Config
-    # ------------------------------------------------------------------
     def _load_config(self):
         if CONFIG_FILE.exists():
             try:
@@ -337,6 +371,7 @@ class TempestDisplay:
             "lightning_unit": self.lightning_unit.get(),
             "elevation": self.elevation.get(),
             "elevation_unit": self.elevation_unit.get(),
+            "density_unit": self.density_unit.get(),
             "autostart": self.autostart.get(),
             "show_fields": {k: v.get() for k, v in self.show_fields.items()},
         }
@@ -364,16 +399,11 @@ class TempestDisplay:
             self.settings_window.destroy()
         self.root.destroy()
 
-    # ------------------------------------------------------------------
-    # Tray
-    # ------------------------------------------------------------------
     def _setup_tray(self):
         def on_show(icon, item):
             self.root.after(0, self._show_from_tray)
-
         def on_quit(icon, item):
             self.root.after(0, self._quit_app)
-
         menu = pystray.Menu(
             pystray.MenuItem("Show", on_show, default=True),
             pystray.MenuItem("Quit", on_quit),
@@ -391,9 +421,6 @@ class TempestDisplay:
         if self.compact_mode:
             self.root.overrideredirect(True)
 
-    # ------------------------------------------------------------------
-    # Theme
-    # ------------------------------------------------------------------
     def _setup_style(self):
         self.style = ttk.Style()
         try:
@@ -441,8 +468,6 @@ class TempestDisplay:
         self.style.configure("Status.TLabel", font=("Segoe UI", 9), background=bg)
         self.style.configure("Grip.TLabel", font=("Segoe UI", 10),
                              foreground=grip_fg, background=bg)
-
-        # Dark mode fix for Entry widgets
         self.style.configure("TEntry", fieldbackground=entry_bg, foreground=entry_fg,
                              insertcolor=entry_fg)
 
@@ -481,9 +506,6 @@ class TempestDisplay:
         self._status_colors = {"ok": status_ok, "err": status_err}
         self._settings_bg = settings_bg
 
-    # ------------------------------------------------------------------
-    # Main UI
-    # ------------------------------------------------------------------
     def _build_ui(self):
         self.top = ttk.Frame(self.root, padding=(10, 8))
         self.top.pack(fill="x")
@@ -562,6 +584,7 @@ class TempestDisplay:
         rows = [
             ("pressure", "Pressure"),
             ("station_pressure", "Station Pressure"),
+            ("air_density", "Air Density"),
             ("feels_like", "Feels Like"),
             ("dew_point", "Dew Point"),
             ("wind_avg", "Wind Average"),
@@ -572,6 +595,7 @@ class TempestDisplay:
             ("uv", "UV Index"),
             ("solar", "Solar Radiation"),
             ("rain", "Rain"),
+            ("rain_rate", "Rain Rate"),
             ("lux", "Illuminance"),
             ("battery", "Battery"),
             ("last_obs", "Last Observation"),
@@ -595,9 +619,6 @@ class TempestDisplay:
         self._update_display()
         self._save_config()
 
-    # ------------------------------------------------------------------
-    # Settings
-    # ------------------------------------------------------------------
     def _toggle_settings(self):
         if self.settings_window and self.settings_window.winfo_exists():
             self._close_settings()
@@ -683,16 +704,21 @@ class TempestDisplay:
         ttk.Radiobutton(uf, text="mm", variable=self.rain_unit, value="mm",
                         style="Settings.TRadiobutton", command=self._pref_changed).grid(row=3, column=2, padx=6)
 
-        # Elevation with selectable unit
-        ttk.Label(uf, text="Elevation:", style="Settings.TLabel").grid(row=4, column=0, sticky="w", padx=4, pady=(8, 3))
+        ttk.Label(uf, text="Air Density", style="Settings.TLabel").grid(row=4, column=0, sticky="w", padx=4, pady=3)
+        ttk.Radiobutton(uf, text="kg/m³", variable=self.density_unit, value="kg/m3",
+                        style="Settings.TRadiobutton", command=self._pref_changed).grid(row=4, column=1, padx=6)
+        ttk.Radiobutton(uf, text="lb/ft³", variable=self.density_unit, value="lb/ft3",
+                        style="Settings.TRadiobutton", command=self._pref_changed).grid(row=4, column=2, padx=6)
+
+        ttk.Label(uf, text="Elevation:", style="Settings.TLabel").grid(row=5, column=0, sticky="w", padx=4, pady=(8, 3))
         elev_entry = ttk.Entry(uf, textvariable=self.elevation, width=10)
-        elev_entry.grid(row=4, column=1, sticky="w", padx=4, pady=(8, 3))
+        elev_entry.grid(row=5, column=1, sticky="w", padx=4, pady=(8, 3))
         elev_entry.bind("<FocusOut>", lambda e: self._pref_changed())
         elev_entry.bind("<Return>", lambda e: self._pref_changed())
         ttk.Radiobutton(uf, text="feet", variable=self.elevation_unit, value="ft",
-                        style="Settings.TRadiobutton", command=self._pref_changed).grid(row=4, column=2, padx=4)
+                        style="Settings.TRadiobutton", command=self._pref_changed).grid(row=5, column=2, padx=4)
         ttk.Radiobutton(uf, text="meters", variable=self.elevation_unit, value="m",
-                        style="Settings.TRadiobutton", command=self._pref_changed).grid(row=4, column=3, padx=4)
+                        style="Settings.TRadiobutton", command=self._pref_changed).grid(row=5, column=3, padx=4)
 
         tf = ttk.LabelFrame(container, text="Time", style="Settings.TLabelframe", padding=10)
         tf.pack(fill="x", pady=(0, 8))
@@ -735,6 +761,7 @@ class TempestDisplay:
         names = [
             ("pressure", "Pressure (sea-level)"),
             ("station_pressure", "Station Pressure"),
+            ("air_density", "Air Density"),
             ("feels_like", "Feels Like (list)"),
             ("dew_point", "Dew Point"),
             ("wind_avg", "Wind Average"),
@@ -745,6 +772,7 @@ class TempestDisplay:
             ("uv", "UV Index"),
             ("solar", "Solar Radiation"),
             ("rain", "Rain"),
+            ("rain_rate", "Rain Rate"),
             ("lux", "Illuminance"),
             ("battery", "Battery"),
             ("last_obs", "Last Observation"),
@@ -758,7 +786,6 @@ class TempestDisplay:
                             command=self._rebuild_fields).grid(
                 row=i // 2, column=i % 2, sticky="w", padx=10, pady=3)
 
-        # Testing / Dev section
         test_frame = ttk.LabelFrame(container, text="Testing", style="Settings.TLabelframe", padding=10)
         test_frame.pack(fill="x", pady=(0, 8))
         ttk.Button(test_frame, text="Simulate Lightning", command=self._simulate_lightning,
@@ -837,9 +864,6 @@ class TempestDisplay:
         link.bind("<Button-1>", lambda e: webbrowser.open(AUTHOR_URL))
         ttk.Button(f, text="Close", command=about.destroy).pack()
 
-    # ------------------------------------------------------------------
-    # Testing / Dev
-    # ------------------------------------------------------------------
     def _simulate_lightning(self):
         self.data["last_strike_ts"] = int(datetime.now().timestamp())
         self.data["last_strike_km"] = 5.2
@@ -867,15 +891,11 @@ class TempestDisplay:
         return f"{km:.1f} km"
 
     def _get_elevation_meters(self):
-        """Return elevation in meters, converting from feet if needed."""
         val = self.elevation.get()
         if self.elevation_unit.get() == "ft":
             return val * 0.3048
         return val
 
-    # ------------------------------------------------------------------
-    # Compact / drag / resize
-    # ------------------------------------------------------------------
     def _current_geometry(self):
         self.root.update_idletasks()
         w = self.root.winfo_width()
@@ -934,14 +954,11 @@ class TempestDisplay:
 
     def _enter_compact_mode(self, save=True):
         self.compact_mode = True
-
         if not self.root.overrideredirect():
             self.full_geometry = self._current_geometry()
-
         self.top.pack_forget()
         self.separator.pack_forget()
         self.grid.pack_forget()
-
         if IS_WINDOWS:
             self.root.withdraw()
             self.root.overrideredirect(True)
@@ -949,50 +966,38 @@ class TempestDisplay:
             self.root.update_idletasks()
         else:
             self.root.update_idletasks()
-
         self.root.geometry(self.compact_geometry)
         self.root.minsize(300, 140)
         self.root.update_idletasks()
-
         self.humidity_label.pack(anchor="e")
         self.rapid_label.pack(anchor="e")
         self.temp_frame.update_idletasks()
-
         self.resize_grip.place(relx=1.0, rely=1.0, anchor="se", x=-4, y=-2)
         self.resize_grip.lift()
-
         if save:
             self._save_config()
 
     def _exit_compact_mode(self):
         self.compact_geometry = self._current_geometry()
         self.compact_mode = False
-
         self.resize_grip.place_forget()
-
         if IS_WINDOWS:
             self.root.withdraw()
             self.root.overrideredirect(False)
             self.root.deiconify()
             self.root.update_idletasks()
-
         self.top.pack(fill="x", before=self.main)
         self.separator.pack(fill="x", pady=8)
         self.grid.pack(fill="both", expand=True)
-
         self.root.geometry(self.full_geometry)
         self.root.minsize(360, 480)
         self.root.update_idletasks()
-
         try:
             apply_rounded_corners(self.root.winfo_id())
         except Exception:
             pass
         self._save_config()
 
-    # ------------------------------------------------------------------
-    # Events
-    # ------------------------------------------------------------------
     def _toggle_always_on_top(self):
         self.root.attributes("-topmost", self.always_on_top.get())
         self._save_config()
@@ -1029,9 +1034,6 @@ class TempestDisplay:
         if self.lightning_alert.get():
             play_alert()
 
-    # ------------------------------------------------------------------
-    # UDP
-    # ------------------------------------------------------------------
     def _start_udp_listener(self):
         def listen():
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1062,17 +1064,21 @@ class TempestDisplay:
                 rh = obs[8]
                 wind_avg = obs[2]
                 station_mb = obs[6]
+                rain_mm = obs[12]
                 elev_m = self._get_elevation_meters()
+                cat, rate = rain_rate_category(rain_mm)
                 self.data.update({
                     "serial": msg.get("serial_number"),
                     "wind_lull_mps": obs[1], "wind_avg_mps": wind_avg,
                     "wind_gust_mps": obs[3], "wind_dir": obs[4],
                     "pressure_mb": station_mb,
-                    "sealevel_pressure_mb": station_to_sealevel_pressure(
-                        station_mb, elev_m, temp_c),
+                    "sealevel_pressure_mb": station_to_sealevel_pressure(station_mb, elev_m, temp_c),
+                    "air_density": air_density(station_mb, temp_c),
+                    "rain_rate_mmh": rate,
+                    "rain_rate_category": cat,
                     "temp_c": temp_c, "humidity": rh,
                     "illuminance": obs[9], "uv": obs[10], "solar_rad": obs[11],
-                    "rain_mm": obs[12], "battery": obs[16], "obs_timestamp": obs[0],
+                    "rain_mm": rain_mm, "battery": obs[16], "obs_timestamp": obs[0],
                     "dew_point_c": dew_point_c(temp_c, rh),
                     "feels_like_c": feels_like_c(temp_c, rh, wind_avg),
                 })
@@ -1100,9 +1106,6 @@ class TempestDisplay:
                     self.root.after(0, lambda: self.status_label.config(
                         text=f"Lightning ~{dist_txt}", foreground="#ff9800"))
 
-    # ------------------------------------------------------------------
-    # Formatting
-    # ------------------------------------------------------------------
     def _fmt_temp(self, c):
         if c is None:
             return "—", ""
@@ -1157,9 +1160,13 @@ class TempestDisplay:
         s = dt.strftime("%I:%M:%S %p UTC")
         return s[1:] if s.startswith("0") else s
 
-    # ------------------------------------------------------------------
-    # Display update
-    # ------------------------------------------------------------------
+    def _fmt_density(self, kgm3):
+        if kgm3 is None:
+            return "—"
+        if self.density_unit.get() == "lb/ft3":
+            return f"{kgm3_to_lbft3(kgm3):.5f} lb/ft³"
+        return f"{kgm3:.3f} kg/m³"
+
     def _update_display(self):
         d = self.data
         val, unit = self._fmt_temp(d["temp_c"])
@@ -1172,8 +1179,15 @@ class TempestDisplay:
 
         rain_txt = self._fmt_rain(d["rain_mm"])
         rain_active = (d["rain_mm"] or 0) > 0
+        rate_cat = d.get("rain_rate_category") or "None"
+
+        if rain_active and rate_cat != "None":
+            compact_rain = f"{rain_txt}  •  {rate_cat}"
+        else:
+            compact_rain = rain_txt
+
         self.compact_rain_label.config(
-            text=rain_txt,
+            text=compact_rain,
             style="Rain.TLabel" if rain_active else "Humidity.TLabel"
         )
 
@@ -1190,10 +1204,16 @@ class TempestDisplay:
             if key in self.labels:
                 self.labels[key].config(text=text)
 
-        # Sea-level pressure shown as "Pressure"
         set_val("pressure", self._fmt_pressure(d.get("sealevel_pressure_mb")))
-        # Raw station pressure
         set_val("station_pressure", self._fmt_pressure(d.get("pressure_mb")))
+        set_val("air_density", self._fmt_density(d.get("air_density")))
+
+        cat = d.get("rain_rate_category") or "None"
+        rate = d.get("rain_rate_mmh") or 0
+        if cat == "None":
+            set_val("rain_rate", "None")
+        else:
+            set_val("rain_rate", f"{cat} ({rate:.2f} mm/h)")
 
         set_val("feels_like", self._fmt_temp_value(d.get("feels_like_c")))
         set_val("dew_point", self._fmt_temp_value(d.get("dew_point_c")))
