@@ -1,10 +1,83 @@
-# LocalTempestWX
+# Local Tempest WX
 
-A lightweight desktop application that displays live data from a **WeatherFlow Tempest** weather station over the local network using the hub’s UDP broadcast.
+A lightweight, cross-platform desktop application that displays real-time weather data from a WeatherFlow Tempest station using the local UDP broadcast (port 50222). No cloud account or internet connection is required.
 
-No cloud account or internet connection is required once the station is on the same LAN as the computer running the app.
+## Features
 
----
+- Real-time display of temperature, humidity, wind, pressure, rain, UV, solar radiation, and more
+- **Sea-level pressure** calculation using the official WeatherFlow/AMS formula (requires elevation)
+- **Station pressure** shown separately
+- **Air density** (kg/m³ or lb/ft³)
+- **Rain rate** with category (None, Very Light, Light, Moderate, Heavy, etc.)
+- Feels-like temperature and dew point
+- Rapid wind updates
+- Lightning strike alerts with optional sound and distance in km or miles
+- Compact mode (borderless on Windows) with drag-to-move and resize grip
+- Dark mode and always-on-top
+- Customizable colors, font sizes, and visible fields
+- System tray support (minimize to tray)
+- Windows autostart option
+- Persistent settings saved to `tempest_display_config.json`
+- Testing tools for lightning and rain (useful when weather is calm)
+- Rounded corners on Windows 11 / recent Ubuntu
+
+## Requirements
+
+- Python 3.8 or newer
+- Tkinter (usually included with Python)
+- Optional (for tray icon):
+  ```bash
+  pip install pystray Pillow
+  ```
+
+## Installation
+
+### Run from source
+```bash
+python local_tempest_wx.py
+```
+
+### Windows executable (recommended)
+1. Install dependencies:
+   ```bash
+   pip install pystray Pillow pyinstaller
+   ```
+2. Build a single-file executable:
+   ```bash
+   pyinstaller --onefile --windowed --hidden-import=pystray._win32 --hidden-import=PIL.Image --hidden-import=PIL.ImageDraw local_tempest_wx.py
+   ```
+3. The executable will be in the `dist` folder.
+
+### Create an installer (optional)
+Use **Inno Setup 6** with the script provided in the project notes, or create one that points to the PyInstaller output.
+
+## Configuration
+
+Settings are saved automatically to `tempest_display_config.json` next to the script or executable.
+
+Key settings:
+- **Elevation** (feet or meters) — required for accurate sea-level pressure
+- Units for temperature, wind, pressure, rain, air density, and lightning distance
+- Dark mode, always-on-top, time format (12/24 hour, local/UTC)
+- Which fields to show
+- Lightning alert on/off
+- Minimize to tray
+- Window geometry for full and compact modes
+
+## Compact Mode
+
+Click the temperature to enter/exit compact mode.
+- Shows temperature, feels-like, rain (with rate category when raining), humidity, and rapid wind
+- Drag anywhere on the compact window to move it
+- Resize grip in the bottom-right corner
+- On Windows the title bar is hidden; on Linux/macOS it remains for better window manager compatibility
+
+## Sea-Level Pressure
+
+The **Pressure** field shows sea-level pressure calculated from station pressure + your elevation using the official WeatherFlow formula.  
+**Station Pressure** shows the raw value from the Tempest.
+
+Enter your elevation in Settings → Units.
 
 ## Screenshots
 
@@ -23,203 +96,15 @@ No cloud account or internet connection is required once the station is on the s
 ### Rain Active
 ![Rain amount highlighted in rain attention color](screenshots/rain-active.png)
 
----
+## Troubleshooting
 
-## Features
-
-- **Real-time local data** via UDP port `50222` (`obs_st`, `rapid_wind`, `evt_strike`)
-- **Desktop window** with large temperature display
-- **Compact mode** — click the temperature to shrink the window; click again to restore
-- **Always-on-top** toggle
-- **Dark / light mode**
-- **Customizable units**
-  - Temperature (°F / °C)
-  - Wind (mph, km/h, m/s, knots)
-  - Pressure (inHg, mb, mmHg)
-  - Rain (inches / mm)
-  - Lightning distance (km / miles)
-- **Calculated values**
-  - Feels-like temperature (heat index or wind chill)
-  - Dew point
-- **Rain display**
-  - Always shown
-  - “No rain” when dry
-  - Colored amount when precipitation is accumulating
-- **Show / hide individual fields**
-- **Font size controls** (temperature and other values)
-- **Color customization** (temperature, humidity/rapid wind, rain)
-- **12-hour / 24-hour time** and local time vs UTC
-- **Lightning notifications** — optional sound + status message, with km or miles
-- **System tray** support (minimize to tray on close)
-- **Start with Windows** (optional)
-- **Settings window** that remembers size and position
-- **Persistent configuration** saved to `tempest_display_config.json`
-- **Testing tools** — simulate lightning strikes and rain from the Settings window
-- **Cross-platform** (Windows, macOS, Linux) — some features are platform-specific
-
----
-
-## Requirements
-
-- **Python 3.8+**
-- A WeatherFlow **Tempest** (or compatible) station + hub on the same local network
-- Optional (for system tray):
-  ```bash
-  pip install pystray pillow
-  ```
-
-No other external dependencies are required for core functionality.
-
----
-
-## Installation
-
-1. Download or clone this repository.
-2. (Optional) Install tray support:
-   ```bash
-   pip install pystray pillow
-   ```
-3. Make sure your computer and Tempest hub are on the same network.
-
-If you're using Windows you can get LocalTempestWX_Setup-x64.exe under Releases.
-
----
-
-## Running the App
-
-```bash
-python local_tempest_wx.py
-```
-
-Or use `pythonw` on Windows to avoid a console window:
-
-```bash
-pythonw local_tempest_wx.py
-```
-
-### Windows Shortcut
-
-Create a shortcut with the target:
-
-```text
-pythonw "C:\path\to\local_tempest_wx.py"
-```
-
----
-
-## Configuration
-
-Settings are saved automatically to:
-
-```
-tempest_display_config.json
-```
-
-(next to the script)
-
-Open **⚙ Settings** to change:
-
-| Category     | Options                                      |
-|--------------|----------------------------------------------|
-| Behavior     | Minimize to tray, lightning notifications, lightning distance (km/miles), autostart (Windows) |
-| Units        | Temperature, wind, pressure, rain            |
-| Time         | Local vs UTC, 12/24-hour                     |
-| Colors       | Temperature, humidity/rapid, rain attention  |
-| Font sizes   | Value text and large temperature             |
-| Show Fields  | Toggle individual data rows                  |
-| Testing      | Simulate Lightning, Toggle Rain              |
-
-Window size, position, compact mode state, and dark mode are also remembered.
-
----
-
-## Compact Mode
-
-- Click the large temperature (or nearby text) to enter compact mode.
-- Compact mode shows temperature, feels-like, rain status, humidity, and rapid wind.
-- Drag the window by clicking and holding the temperature area.
-- Resize using the grip in the bottom-right corner.
-- Click the temperature again to return to the full view.
-
-**Platform notes:**
-- **Windows**: borderless window.
-- **Linux / macOS**: keeps the title bar for more reliable size and position memory.
-
----
-
-## Lightning Notifications
-
-- Enable or disable lightning notifications (sound + status message) in Settings → Behavior.
-- Choose distance unit: **km** or **miles**.
-- Use **Simulate Lightning** in the Testing section to test the alert without waiting for real weather.
-
----
-
-## Data Displayed
-
-| Field              | Source / Notes                          |
-|--------------------|-----------------------------------------|
-| Temperature        | Station observation                     |
-| Feels Like         | Calculated (heat index / wind chill)    |
-| Humidity           | Station observation                     |
-| Rapid Wind         | High-frequency wind updates             |
-| Pressure           | Station observation                     |
-| Wind Average/Gust/Lull | Station observation                 |
-| Wind Direction     | Compass + degrees                       |
-| Dew Point          | Calculated                              |
-| UV Index           | Station observation                     |
-| Solar Radiation    | Station observation                     |
-| Rain               | Interval accumulation (“No rain” if 0)  |
-| Illuminance        | Station observation                     |
-| Battery            | Station voltage                         |
-| Last Observation   | Timestamp of latest full observation    |
-| Device             | Serial number                           |
-
----
-
-## How It Works
-
-The app listens on UDP port **50222** for broadcasts from the Tempest hub. It parses:
-
-- `obs_st` — full observation (~every minute)
-- `rapid_wind` — frequent wind updates
-- `evt_strike` — lightning events
-
-All processing happens locally. No data is sent to any external service.
-
----
-
-## Cross-Platform Notes
-
-| Feature              | Windows | macOS | Linux |
-|----------------------|---------|-------|-------|
-| Core display         | Yes     | Yes   | Yes   |
-| System tray          | Yes*    | Yes*  | Yes*  |
-| Start with OS        | Yes     | No    | No    |
-| Rounded corners      | Win11   | No    | No    |
-| Lightning sound      | Yes     | Limited | Limited |
-| Borderless compact   | Yes     | No    | No    |
-
-\*Requires `pystray` + `Pillow`.
-
----
-
-## Project Structure
-
-```
-.
-├── local_tempest_wx.py          # Main application
-├── tempest_display_config.json # Auto-generated settings (created on first run)
-├── screenshots/                # Optional screenshots for the README
-│   ├── full-view.png
-│   ├── compact-mode.png
-│   ├── settings.png
-│   ├── dark-mode.png
-│   └── rain-active.png
-└── README.md
-```
-
----
+| Issue | Solution |
+|-------|----------|
+| No data received | Ensure the Tempest hub is on the same network and UDP port 50222 is not blocked |
+| Tray icon missing | Install `pystray` and `Pillow`, then rebuild the executable |
+| Preferences not saving | Run the executable from a writable folder (not `Program Files`), or check that `tempest_display_config.json` is being created next to it |
+| Compact mode geometry not remembered on Linux | This is a window-manager limitation; the app tries to restore size/position but some environments ignore it |
+| Lightning/rain alerts hard to test | Use the **Simulate Lightning** and **Toggle Rain** buttons in Settings → Testing |
 
 ## Credits
 
@@ -230,30 +115,26 @@ https://orangedragon.co/labs/dev
 Based on the WeatherFlow Tempest UDP broadcast specification:  
 https://apidocs.tempestwx.com/reference/tempest-udp-broadcast
 
----
-
 ## License
 
-This project is provided as-is for personal and educational use. Feel free to modify and share.
+Personal use / open source. Attribution appreciated if you share or modify it.
 
----
+## Changelog
 
-## Troubleshooting
+### 1.6
+- Official WeatherFlow/AMS sea-level pressure formula
+- Air density with kg/m³ or lb/ft³ preference
+- Rain rate category (None, Very Light, Light, Moderate, Heavy, etc.)
+- Rain rate shown next to rain amount in compact mode when raining
+- Elevation unit selectable (feet or meters)
+- Dark mode entry field visibility fix
+- Rain Rate field positioned next to Rain in the display and Settings
 
-| Issue                        | Possible Fix                                      |
-|-----------------------------|---------------------------------------------------|
-| No data appears             | Confirm same network as hub; check firewall for UDP 50222 |
-| Bind error                  | Another program may already be using port 50222   |
-| Tray icon missing           | Install `pystray` and `Pillow`                    |
-| Settings window off-screen  | Delete `tempest_display_config.json` and restart  |
-| Lightning sound not working | Expected on non-Windows; enable in Settings       |
-| Compact mode size not remembered on Linux | Expected — title bar is kept for reliability |
+### Earlier versions
+- Compact mode with geometry persistence
+- System tray and Windows autostart
+- Lightning distance unit (km/miles) and notification toggle
+- Testing tools for lightning and rain
+- Cross-platform improvements and Linux compact mode fixes
+- Color customization, font sizing, and field visibility options
 
----
-
-## Known Issues
-
-- Compact mode on Linux/macOS keeps the title bar (by design) so size and position are remembered correctly.
-- Lightning sound is most reliable on Windows.
-
-Enjoy your local weather display.
